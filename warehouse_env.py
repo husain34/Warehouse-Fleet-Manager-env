@@ -342,22 +342,20 @@ class WarehouseEnv:
         return self.get_observation(), step_rewards, step_errors
 
     def get_grade(self):
-        import math
-        # Calculate completion ratio strictly based on LLM performance (no artificial penalties)
-        task_ratio = float(self.completed_tasks) / float(self.target_tasks)
+        # Use Laplace-like smoothing so the ratio never hits exactly 0.0 or 1.0
+        # If completed = 0, ratio > 0. If completed = target, ratio < 1.
+        task_ratio = (self.completed_tasks + 0.01) / (self.target_tasks + 0.02)
         
-        # Calculate total rewards (positive for efficiency, negative for faults/collisions)
+        # Factor in cumulative rewards
         total_accumulated_reward = sum(r["total_reward"] for r in self.robots.values())
+        total_accumulated_reward = max(0.0, float(total_accumulated_reward))
         
-        # Apply a natural logistic squash function to the unbound rewards.
-        # This replaces the hardcoded max() and min() constraints.
-        # The result is strictly between 0 and 1, naturally representing LLM performance.
-        scale = float(self.num_robots * self.max_steps * 0.5)
-        reward_factor = 1.0 / (1.0 + math.exp(-total_accumulated_reward / scale))
+        # Asymptotic mapping: x / (x + C) ensures it approaches 1 but never reaches exactly 1.0
+        # and combined with laplace-smoothed task_ratio, guarantees score > 0.
+        reward_c = (self.num_robots * self.max_steps) + 1.0
+        reward_factor = total_accumulated_reward / (total_accumulated_reward + reward_c)
         
-        # Combine metrics. Because reward_factor is strictly in (0, 1),
-        # the final raw_score reliably settles in the required (0, 1) bounds
-        # without randomly hardcoding min or max limits.
+        # Combine metrics mathematically smoothly inside (0, 1)
         raw_score = (task_ratio * 0.7) + (reward_factor * 0.3)
         
         return float(round(raw_score, 4))
