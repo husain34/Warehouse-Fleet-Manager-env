@@ -1,0 +1,7 @@
+name: warehouse_fleet_management
+version: 1.0.0
+description: A warehouse fleet management simulator for robots
+tasks:
+  - easy_navigation
+  - medium_coordination
+  - hard_swarm
