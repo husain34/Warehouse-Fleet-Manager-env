@@ -23,10 +23,16 @@ def root():
     return {"status": "Warehouse Env Running"}
 
 
+from typing import Optional
+
 @app.post("/reset")
-def reset(task_name: str):
+def reset(task_name: Optional[str] = "easy"):
     global ENV
-    config = load_task(task_name)
+    try:
+        config = load_task(task_name)
+    except FileNotFoundError:
+        config = load_task("easy")
+        
     ENV = WarehouseOpenEnv(config)
     obs = ENV.reset()
     return obs.model_dump()
