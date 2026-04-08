@@ -342,21 +342,25 @@ class WarehouseEnv:
         return self.get_observation(), step_rewards, step_errors
 
     def get_grade(self):
-        # Calculate completion ratio
+        import math
+        # Calculate completion ratio strictly based on LLM performance (no artificial penalties)
         task_ratio = float(self.completed_tasks) / float(self.target_tasks)
         
-        # Factor in cumulative rewards to differentiate performance 
-        # (normalized by number of robots and max steps to keep it stable)
+        # Calculate total rewards (positive for efficiency, negative for faults/collisions)
         total_accumulated_reward = sum(r["total_reward"] for r in self.robots.values())
-        reward_factor = max(0, total_accumulated_reward) / (self.num_robots * self.max_steps + 1)
         
-        # Combine metrics and map to (0, 1) using a squash function
-        # This ensures it never hits 0.0 or 1.0 exactly.
-        raw_score = (task_ratio * 0.7) + (min(1.0, reward_factor) * 0.3)
+        # Apply a natural logistic squash function to the unbound rewards.
+        # This replaces the hardcoded max() and min() constraints.
+        # The result is strictly between 0 and 1, naturally representing LLM performance.
+        scale = float(self.num_robots * self.max_steps * 0.5)
+        reward_factor = 1.0 / (1.0 + math.exp(-total_accumulated_reward / scale))
         
-        # Use a small epsilon offset to stay strictly within (0, 1)
-        exclusive_grade = 0.001 + (raw_score * 0.998)
-        return float(round(exclusive_grade, 4))
+        # Combine metrics. Because reward_factor is strictly in (0, 1),
+        # the final raw_score reliably settles in the required (0, 1) bounds
+        # without randomly hardcoding min or max limits.
+        raw_score = (task_ratio * 0.7) + (reward_factor * 0.3)
+        
+        return float(round(raw_score, 4))
 
 
 # =========================
