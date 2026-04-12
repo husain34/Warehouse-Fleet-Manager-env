@@ -138,7 +138,7 @@ def run_benchmark():
 
         except Exception as e:
             print(f"[ERROR]: {e}")
-            print(f"[END] success=false steps={step_idx} rewards=0.00", flush=True)
+            print(f"[END] success=false steps={step_idx} score=0.000 rewards=0.00", flush=True)
         finally:
             env.close()
 

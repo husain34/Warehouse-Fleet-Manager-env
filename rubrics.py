@@ -39,13 +39,18 @@ class SustainabilityRubric(Rubric):
         env = observation
         if not env.robots: return 1.0
         
-        avg_battery = sum(r["battery"] for r in env.robots.values()) / len(env.robots)
+        # Support both dict robots (WarehouseEnv) and RobotState objects (WarehouseOpenEnv)
+        def _battery(r):
+            return r["battery"] if isinstance(r, dict) else r.battery
+        
+        avg_battery = sum(_battery(r) for r in env.robots.values()) / len(env.robots)
         
         # Penalty for any robot being 'dead' or very low battery
         critical_battery_penalty = 0.0
         for r in env.robots.values():
-            if r["battery"] < 5: critical_battery_penalty += 0.25
-            elif r["battery"] < 20: critical_battery_penalty += 0.05
+            b = _battery(r)
+            if b < 5: critical_battery_penalty += 0.25
+            elif b < 20: critical_battery_penalty += 0.05
             
         battery_health = min(1.0, avg_battery / 100.0)
         
@@ -55,7 +60,7 @@ class SLAComplianceRubric(Rubric):
     """Measures if tasks were completed within reasonable timeframes."""
     def forward(self, action: Any, observation: Any) -> float:
         env = observation
-        if env.completed_tasks == 0: return 0.5 # Neutral start
+        if env.completed_tasks == 0: return 0.0  # No credit until first task done
         
         # Calculate average steps per task
         avg_steps = env.step_count / env.completed_tasks

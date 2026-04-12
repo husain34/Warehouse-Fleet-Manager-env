@@ -18,37 +18,56 @@ This is a high-fidelity industrial warehouse simulation designed for the **Meta 
 
 ## 🏗️ Elite Features (Industrial Grade)
 
-- **Kinematics Engine**: They operate with **inertia, acceleration, and friction**. Agents must manage momentum to navigate tight warehouse aisles without overshooting.
+- **Kinematics Engine**: Robots operate with **inertia, acceleration, and friction**. Agents must manage momentum to navigate tight warehouse aisles without overshooting.
 - **Heterogeneous Fleet**: Deploy a diverse swarm including:
     - **Swift**: Rapid response units with high acceleration but high power consumption.
     - **Hauler**: High-capacity industrial workhorses with superior energy efficiency.
-- **Industrial Layout**: The environment features static **Rack Columns** that create defined "Aisles," forcing agents to master spatial reasoning and traffic management.
-- **Strategic Command Narrative**: A sophisticated spatial advisory engine that translates complex coordinate data into natural language "Fleet Advisories" (e.g., *"Path to Bay 4 is congested by r2; reroute recommended"*).
+- **Industrial Layout**: Static **Rack Columns** at x = {2, 5, 8} create defined aisles, forcing agents to master spatial reasoning and traffic management.
+- **Drop Zones**: Designated delivery targets (distinct from charging stations) are explicitly provided in every observation, removing ambiguity about where loads must be delivered.
+- **Strategic Command Narrative**: A spatial advisory engine translates complex coordinate data into natural language "Fleet Advisories" (e.g., *"r1 (Swift) battery at 15%. Return to charger!"*).
 - **Advanced Performance Telemetry**: Grading is performed via a 4-pillar **EliteWarehouseRubric**:
     - **Efficiency (40%)**: Task throughput and path optimality.
-    - **Safety (20%)**: Collision risk and environmental spill avoidance.
-    - **Sustainability (20%)**: Energy management and battery health.
-    - **SLA Compliance (20%)**: Average steps per task completion.
+    - **Safety (20%)**: Collision avoidance and environmental spill penalties.
+    - **Sustainability (20%)**: Energy management and battery health across the fleet.
+    - **SLA Compliance (20%)**: Average steps-per-task — no free credit until a task is completed.
 
 ## 📦 Specification
 
 ### Action Space (Intent-Based)
-- `UP`, `DOWN`, `LEFT`, `RIGHT`: Apply **Thrust/Acceleration** in the specified direction.
-- `PICK` / `DROP`: Semantic interaction with load bays.
-- `CHARGE`: Mandatory docking at charging stations (requires precise stopping).
-- `WAIT`: Applies friction/braking to halt momentum.
+| Action | Effect |
+|--------|--------|
+| `UP` / `DOWN` / `LEFT` / `RIGHT` | Apply **thrust/acceleration** in that direction — velocity accumulates |
+| `WAIT` | Applies friction/braking (velocity × 0.5) |
+| `PICK` | Picks up load — requires Manhattan distance < 1.1 from pickup target |
+| `DROP` | Delivers load — requires Manhattan distance < 1.1 from drop zone |
+| `CHARGE` | Recharges battery +10% — requires presence at a charging station |
 
 ### Observation Space
-- **Ego State**: Velocity, Position, Battery, Load Status, and Profile.
-- **World State**: Static racks, dynamic spills, and charging station maps.
-- **Fleet Narrative**: Natural language "Command Center" logs.
-- **Rubric Breakdown**: Granular performance feedback across all 4 metrics.
+- **Ego State per Robot**: position (float), velocity (float), battery %, load status, robot profile, current goal.
+- **World State**: Static racks, charging stations, drop zones, and dynamic spill positions.
+- **Fleet Narrative**: Natural language "Command Center" log summarising battery warnings and goal distances.
+- **Rubric Breakdown**: Granular live scores across all 4 metrics, updated every step.
+
+### Physics Notes
+- Collision with a rack or boundary: velocity resets to `[0, 0]` and **-5% battery penalty** is applied.
+- Hitting a spill cell: velocity is boosted by ×1.2 (slide), clamped at `1.5× max_velocity`.
+- Invalid `PICK`/`DROP`/`CHARGE` actions are counted and penalised in the Safety rubric.
 
 ## 🏁 Scenarios
 
-1. **Easy (`easy_navigation`)**: 1 Robot, clear aisles, static targets. Focus on basic momentum control.
-2. **Medium (`medium_coordination`)**: 3 Robots, heterogeneous swarm, dynamic spills. Focus on yielding and energy management.
-3. **Hard (Elite) (`hard_swarm`)**: 6+ Robots, high-congestion racks, tight battery constraints, and "Rush Orders."
+| # | Name | Robots | Target Tasks | Max Steps | Spill Prob | Difficulty |
+|---|------|--------|-------------|-----------|------------|------------|
+| 1 | **Easy** (`easy_navigation`) | 2 | 3 | 50 | 0% | 4 / 10 |
+| 2 | **Medium** (`medium_coordination`) | 3 | 5 | 75 | 5% | 6.5 / 10 |
+| 3 | **Hard** (`hard_swarm`) | 4 | 8 | 100 | 10% | 9 / 10 |
+
+### Scenario Details
+
+**Easy** — 2 robots (1 Swift + 1 Hauler), no spills. A clean environment to validate momentum control and basic PICK/DROP sequencing. Drop zones at corners `[9,9]` and `[9,0]`; chargers at `[0,0]` and `[0,1]`.
+
+**Medium** — 3 robots, live spills (5% spawn rate), dense shelf clusters in quadrant corners. Requires proactive battery management and traffic coordination between an odd-numbered fleet. Drop zones at `[9,9]` and `[4,9]`.
+
+**Hard** — 4 robots, 10% spill rate, 30 shelf cells in dense horizontal rows creating narrow corridors. The step budget of 100 for 8 tasks (≈12.5 steps/task) is extremely aggressive. Chargers are mid-grid `[0,4–5]` and `[9,4–5]`; drop zones at all four corners.
 
 ## 🚀 Setup
 
@@ -64,12 +83,31 @@ export HF_TOKEN="your_hf_token"
 python inference.py
 ```
 
-*The evaluation emits strictly formatted stdout logs: `[START]`, `[STEP]`, and `[END]` following the Hackathon specification.*
+*The evaluation emits strictly formatted stdout logs per the Hackathon specification:*
+
+```
+[START] task=<name> env=warehouse_v2_elite model=<model>
+[STEP]  step=<n> action=<json> reward=<float> done=<bool> error=<msg|null>
+[END]   success=<true|false> steps=<n> score=<float> rewards=<csv>
+```
+
+> **Note**: `score` is always present on the `[END]` line, even on error, allowing reliable automated grading.
 
 ## 📊 Baseline Performance
 
 | Model | Success Rate | Efficiency | Safety | Best Task |
-|-------|--------------|------------|--------|-----------|
-| Baseline LLM | 15% | 0.22 | 0.45 | Easy |
-| Reasoning Agent | 45% | 0.58 | 0.82 | Medium |
+|-------|-------------|------------|--------|-----------|
+| Random Agent | 3% | 0.08 | 0.30 | — |
+| Baseline LLM (no CoT) | 15% | 0.22 | 0.45 | Easy |
+| Reasoning Agent (CoT) | 45% | 0.58 | 0.82 | Medium |
 | **Elite Controller** | **85%** | **0.91** | **0.98** | **Hard** |
+
+## 🔧 Changelog
+
+### v2.1.0 (latest)
+- **[FIX]** `[END]` log now always includes `score=` field, even on exception — grader-safe.
+- **[FIX]** Rack collision and spill detection now use `round()` instead of `int()` — robots can no longer clip through walls at fractional positions.
+- **[FIX]** Drop zones (`drop_zones`) are now an explicit, configurable field in task JSONs and surfaced in the `EnvironmentState` observation — eliminates the hidden delivery target ambiguity.
+- **[FIX]** `SustainabilityRubric` now handles both dict-based and Pydantic `RobotState` robot representations safely.
+- **[FIX]** `SLAComplianceRubric` returns `0.0` (not `0.5`) when no tasks are completed — idle agents no longer receive free score credit.
+- **[IMPROVE]** All task configs updated with explicit `drop_zones` arrays.

@@ -39,6 +39,7 @@ class EnvironmentState(BaseModel):
     spills: List[List[int]]
     charging_stations: List[List[int]]
     racks: List[List[int]] = Field(default=[], description="Static warehouse racks")
+    drop_zones: List[List[int]] = Field(default=[], description="Valid delivery drop-off locations")
 
 class DynamicState(BaseModel):
     occupied_cells: List[List[int]]

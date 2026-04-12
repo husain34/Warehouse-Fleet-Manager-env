@@ -43,6 +43,8 @@ class WarehouseEnv:
 
         self.charging_stations = config.get("charging_stations", [[0, 0]])
         self.shelves = config.get("shelves", [])
+        # Drop zones: explicit delivery targets (distinct from charging stations)
+        self.drop_zones = config.get("drop_zones", [[0, 9], [9, 0]])
         
         # Industrial Layout: Racks
         self.racks = self._generate_industrial_racks()
@@ -112,7 +114,7 @@ class WarehouseEnv:
                 pickup_loc = candidate
                 break
         
-        dropoff_loc = random.choice(self.charging_stations + [[0, 9], [9, 0]])
+        dropoff_loc = random.choice(self.charging_stations + self.drop_zones)
         
         robot["goal"] = pickup_loc
         robot["pickup_target"] = pickup_loc
@@ -198,7 +200,7 @@ class WarehouseEnv:
                 hit = True
                 step_errors.append(f"{rid} boundary collision")
             # Racks
-            elif [int(new_pos[0]), int(new_pos[1])] in self.racks:
+            elif [round(new_pos[0]), round(new_pos[1])] in self.racks:
                 hit = True
                 step_errors.append(f"{rid} rack collision")
             
@@ -240,7 +242,7 @@ class WarehouseEnv:
                     self.invalid_action_count += 1
 
             # Spill Penalty & SLIDE (ANTI-EXPLOIT velocity hard-clamp)
-            if [int(robot["pos"][0]), int(robot["pos"][1])] in [s["pos"] for s in self.spills]:
+            if [round(robot["pos"][0]), round(robot["pos"][1])] in [s["pos"] for s in self.spills]:
                 self.spill_hits += 1
                 robot["velocity"][0] *= 1.2 
                 robot["velocity"][1] *= 1.2
@@ -303,7 +305,8 @@ class WarehouseOpenEnv:
                 obstacles=[],
                 spills=core["spills"],
                 charging_stations=self.env.charging_stations,
-                racks=self.env.racks
+                racks=self.env.racks,
+                drop_zones=self.env.drop_zones
             ),
             dynamic=DynamicState(
                 occupied_cells=[[int(r["pos"][0]), int(r["pos"][1])] for r in self.env.robots.values()],
