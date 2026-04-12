@@ -1,6 +1,8 @@
 import random
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple, Any
 from pydantic import BaseModel, field_validator
+from openenv.core.rubrics.base import Rubric
+from openenv.core.rubrics.containers import WeightedSum
 
 # =========================
 # 🔹 Pydantic Schemas
@@ -62,10 +64,49 @@ class Observation(BaseModel):
     task_info: TaskInfo
     step_info: StepInfo
     last_action_error: Optional[str]
+    narrative: str
+    rubric_scores: Dict[str, float]
 
 
 # =========================
-# 🔹 Core Logic (UNCHANGED)
+# 🧠 Rubric Definitions
+# =========================
+
+class SuccessRubric(Rubric):
+    def forward(self, action: Any, observation: Any) -> float:
+        # observation is the environment instance during internal evaluation
+        env = observation
+        if env.target_tasks == 0: return 1.0
+        return min(1.0, env.completed_tasks / env.target_tasks)
+
+class EfficiencyRubric(Rubric):
+    def forward(self, action: Any, observation: Any) -> float:
+        env = observation
+        if env.step_count == 0: return 1.0
+        # Ideal steps: Manhattan distance of all completed tasks
+        # For simplicity, we use (completed_tasks * grid_size) as a baseline
+        # but here we'll just use a decay over time.
+        penalty = (env.step_count / env.max_steps) * 0.2
+        return max(0.0, 1.0 - penalty)
+
+class SafetyRubric(Rubric):
+    def forward(self, action: Any, observation: Any) -> float:
+        env = observation
+        if env.step_count == 0: return 1.0
+        # Spill hits recorded in env.spill_hits
+        hits = getattr(env, "spill_hits", 0)
+        penalty = min(1.0, (hits * 2) / (env.num_robots * 10))
+        return 1.0 - penalty
+
+class WarehouseRubric(WeightedSum):
+    def __init__(self):
+        super().__init__(
+            rubrics=[SuccessRubric(), EfficiencyRubric(), SafetyRubric()],
+            weights=[0.6, 0.2, 0.2]
+        )
+
+# =========================
+# 🔹 Core Logic
 # =========================
 
 class WarehouseEnv:
@@ -88,6 +129,7 @@ class WarehouseEnv:
         self.robots = {}
         self.obstacles = []
         self.spills = []
+        self.spill_hits = 0
 
         self._initialize_elements()
         self._spawn_robots()
@@ -112,6 +154,27 @@ class WarehouseEnv:
             raise Exception("No free cells available!")
 
         return random.choice(free_cells)
+
+    def generate_narrative(self):
+        """Generates a high-level natural language summary for reasoning agents."""
+        narrative = f"Warehouse {self.size}x10 grid with {self.num_robots} robots. Step {self.step_count}/{self.max_steps}. "
+        
+        statuses = []
+        for rid, r in self.robots.items():
+            dist = self._manhattan(r["pos"], r["goal"])
+            task_type = "PICKUP" if not r["picked"] else "DROPOFF"
+            statuses.append(
+                f"{rid} is at {r['pos']}, {dist} steps from {task_type} goal at {r['goal']}. "
+                f"{'Has package' if r['picked'] else 'Ready to pick'}."
+            )
+        
+        narrative += " ".join(statuses)
+        
+        if self.spills:
+            spill_locs = [str(s["pos"]) for s in self.spills]
+            narrative += f" Warning: environmental spills at {', '.join(spill_locs)}."
+            
+        return narrative
 
     def _get_valid_adjacent(self, target_pos):
         x, y = target_pos
@@ -331,6 +394,7 @@ class WarehouseEnv:
             # ⚠️ SPILL COLLISION PENALTY
             if robot["pos"] in [s["pos"] for s in self.spills]:
                 reward -= 6.0
+                self.spill_hits += 1
 
             # 🚦 CONGESTION penalty
             for _, _, val in self._calculate_congestion():
@@ -342,23 +406,18 @@ class WarehouseEnv:
         return self.get_observation(), step_rewards, step_errors
 
     def get_grade(self):
-        # Use Laplace-like smoothing so the ratio never hits exactly 0.0 or 1.0
-        # If completed = 0, ratio > 0. If completed = target, ratio < 1.
-        task_ratio = (self.completed_tasks + 0.01) / (self.target_tasks + 0.02)
-        
-        # Factor in cumulative rewards
-        total_accumulated_reward = sum(r["total_reward"] for r in self.robots.values())
-        total_accumulated_reward = max(0.0, float(total_accumulated_reward))
-        
-        # Asymptotic mapping: x / (x + C) ensures it approaches 1 but never reaches exactly 1.0
-        # and combined with laplace-smoothed task_ratio, guarantees score > 0.
-        reward_c = (self.num_robots * self.max_steps) + 1.0
-        reward_factor = total_accumulated_reward / (total_accumulated_reward + reward_c)
-        
-        # Combine metrics mathematically smoothly inside (0, 1)
-        raw_score = (task_ratio * 0.7) + (reward_factor * 0.3)
-        
-        return float(round(raw_score, 4))
+        rubric = WarehouseRubric()
+        # We pass self as the observation for internal rubric evaluation
+        final_score = rubric(None, self)
+        return float(round(final_score, 4))
+
+    def get_rubric_breakdown(self):
+        rubric = WarehouseRubric()
+        rubric(None, self)
+        scores = {}
+        for name, child in rubric.named_children():
+            scores[name] = float(round(child.last_score, 2))
+        return scores
 
 
 # =========================
@@ -410,7 +469,9 @@ class WarehouseOpenEnv:
                 step_count=core["step_count"],
                 max_steps=core["max_steps"]
             ),
-            last_action_error=self.last_error
+            last_action_error=self.last_error,
+            narrative=self.env.generate_narrative(),
+            rubric_scores=self.env.get_rubric_breakdown()
         )
 
     def reset(self):

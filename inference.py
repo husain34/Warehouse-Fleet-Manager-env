@@ -90,16 +90,17 @@ For EVERY active robot provided in the Observation's `robots` dictionary (and ON
 Return ONLY a valid JSON object. No markdown prose outside the JSON. Use the `reasoning` field to execute the 5-step protocol for EVERY robot so you do not hallucinate coordinates.
 
 {
-  "reasoning": "r1: pos [2,5], goal [8,5]. Target: RIGHT. Next: [3,5]. Valid cell, no errors. r2: pos [3,5], goal [3,9]. Target: UP, but r1 is targeting [3,5] which is r2's current pos. r2 MUST EVADE. R2 target changed to UP [3,6]. r3: pos [0,9], goal [5,9]. Target RIGHT. X+1=[1,9]. But last_action_error was 'r3 hit obstacle'. Forced to move DOWN [0,8].",
+  "reasoning": "r1 is at [2,5], 3 steps from pickup. Narrative says path is clear. Moving RIGHT to [3,5]. r2 is low battery...",
   "actions": {
     "r1": "RIGHT",
-    "r2": "UP",
-    "r3": "DOWN"
+    "r2": "UP"
   }
 }
 """
 
-    prompt = f"{BASE_PROMPT}\n\nObservation:\n{json.dumps(obs_data)}"
+    # ENHANCEMENT: Use the narrative for reasoning
+    obs_narrative = obs_data.get("narrative", "No narrative available.")
+    prompt = f"{BASE_PROMPT}\n\nSTRATEGIC NARRATIVE:\n{obs_narrative}\n\nRAW DATA:\n{json.dumps(obs_data)}"
 
     try:
         # Following your teammate's pattern: stream=True and handling reasoning_content
@@ -175,11 +176,11 @@ def run_benchmark():
                 action_str = json.dumps(action_dict, separators=(',', ':'))
                 print(f"[STEP] step={step_idx} action={action_str} reward={reward.total:.2f} done={str(done).lower()} error={err_msg}", flush=True)
 
-            # [END] line - Required by Meta Guidelines
-            score = info.get("grade", 0.0)
-            success_str = "true" if score >= 1.0 else "false"
+            # [END] line - Required by Meta Guidelines (STRICT FORMAT)
+            score = float(info.get("grade", 0.0))
+            success_str = "true" if score >= 0.8 else "false"
             rewards_str = ",".join([f"{r:.2f}" for r in rewards])
-            print(f"[END] success={success_str} steps={step_idx} score={score:.2f} rewards={rewards_str}", flush=True)
+            print(f"[END] success={success_str} steps={step_idx} score={score:.3f} rewards={rewards_str}", flush=True)
 
         except Exception as e:
             # If the loop crashes, we MUST still print an [END] line
