@@ -57,17 +57,17 @@ This is a high-fidelity industrial warehouse simulation designed for the **Meta 
 
 | # | Name | Robots | Target Tasks | Max Steps | Spill Prob | Difficulty |
 |---|------|--------|-------------|-----------|------------|------------|
-| 1 | **Easy** (`easy_navigation`) | 2 | 3 | 50 | 0% | 4 / 10 |
-| 2 | **Medium** (`medium_coordination`) | 3 | 5 | 75 | 5% | 6.5 / 10 |
-| 3 | **Hard** (`hard_swarm`) | 4 | 8 | 100 | 10% | 9 / 10 |
+| 1 | **Easy** (`easy_navigation`) | 2 | 2 | 80 | 0% | 4 / 10 |
+| 2 | **Medium** (`medium_coordination`) | 3 | 4 | 100 | 3% | 6 / 10 |
+| 3 | **Hard** (`hard_swarm`) | 4 | 6 | 130 | 6% | 8.5 / 10 |
 
 ### Scenario Details
 
-**Easy** — 2 robots (1 Swift + 1 Hauler), no spills. A clean environment to validate momentum control and basic PICK/DROP sequencing. Drop zones at corners `[9,9]` and `[9,0]`; chargers at `[0,0]` and `[0,1]`.
+**Easy** — 2 robots (1 Swift + 1 Hauler), no spills, 80 steps. A clean environment to validate momentum control and basic PICK/DROP sequencing. 2 tasks required. Drop zones at `[9,9]` and `[9,0]`; chargers at `[0,0]` and `[0,1]`.
 
-**Medium** — 3 robots, live spills (5% spawn rate), dense shelf clusters in quadrant corners. Requires proactive battery management and traffic coordination between an odd-numbered fleet. Drop zones at `[9,9]` and `[4,9]`.
+**Medium** — 3 robots, low spills (3%), dense shelf clusters, 100 steps, 4 tasks. Requires proactive battery management and cross-fleet coordination. Drop zones at `[9,9]` and `[4,9]`.
 
-**Hard** — 4 robots, 10% spill rate, 30 shelf cells in dense horizontal rows creating narrow corridors. The step budget of 100 for 8 tasks (≈12.5 steps/task) is extremely aggressive. Chargers are mid-grid `[0,4–5]` and `[9,4–5]`; drop zones at all four corners.
+**Hard** — 4 robots, moderate spills (6%), 30 shelf cells in dense horizontal rows, 130 steps, 6 tasks. Chargers mid-grid at `[0,4–5]` and `[9,4–5]`; drop zones at all four corners.
 
 ## 🚀 Setup
 
@@ -104,10 +104,18 @@ python inference.py
 
 ## 🔧 Changelog
 
-### v2.1.0 (latest)
+### v2.2.0 (latest)
+- **[FIX]** Score is now guaranteed strictly within `(0, 1)` via a `tanh`-based sigmoid squash applied to the raw rubric output — no hardcoded floor/ceiling, mathematically principled.
+- **[IMPROVE]** PICK / DROP / CHARGE proximity threshold widened from `1.1` → `1.5` Manhattan units to account for floating-point momentum positions.
+- **[IMPROVE]** SLA elite threshold relaxed from 20 → 30 steps/task, poor threshold from 40 → 60 steps/task — calibrated for momentum-based physics.
+- **[IMPROVE]** Safety rubric collision penalty softened (per-collision 0.20 → 0.15; cap 0.80 → 0.60).
+- **[IMPROVE]** Sustainability rubric critical-battery thresholds softened (dead robot penalty 0.25 → 0.20).
+- **[IMPROVE]** Task configs rebalanced: Easy (80 steps / 2 tasks), Medium (100 steps / 4 tasks / 3% spills), Hard (130 steps / 6 tasks / 6% spills).
+
+### v2.1.0
 - **[FIX]** `[END]` log now always includes `score=` field, even on exception — grader-safe.
 - **[FIX]** Rack collision and spill detection now use `round()` instead of `int()` — robots can no longer clip through walls at fractional positions.
-- **[FIX]** Drop zones (`drop_zones`) are now an explicit, configurable field in task JSONs and surfaced in the `EnvironmentState` observation — eliminates the hidden delivery target ambiguity.
+- **[FIX]** Drop zones (`drop_zones`) are now an explicit, configurable field in task JSONs and surfaced in the `EnvironmentState` observation.
 - **[FIX]** `SustainabilityRubric` now handles both dict-based and Pydantic `RobotState` robot representations safely.
-- **[FIX]** `SLAComplianceRubric` returns `0.0` (not `0.5`) when no tasks are completed — idle agents no longer receive free score credit.
+- **[FIX]** `SLAComplianceRubric` returns `0.0` (not `0.5`) when no tasks are completed.
 - **[IMPROVE]** All task configs updated with explicit `drop_zones` arrays.

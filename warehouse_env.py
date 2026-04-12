@@ -219,14 +219,14 @@ class WarehouseEnv:
 
             # 5. Semantic Actions (PICK/DROP/CHARGE) (ANTI-EXPLOIT penalties)
             if act == ActionType.PICK:
-                if self._manhattan(robot["pos"], robot["pickup_target"]) < 1.1 and not robot["picked"]:
+                if self._manhattan(robot["pos"], robot["pickup_target"]) < 1.5 and not robot["picked"]:
                     robot["picked"] = 1
                     robot["current_load"] = 1.0
                     robot["goal"] = robot["dropoff_target"]
                 else:
                     self.invalid_action_count += 1
             elif act == ActionType.DROP:
-                if self._manhattan(robot["pos"], robot["dropoff_target"]) < 1.1 and robot["picked"]:
+                if self._manhattan(robot["pos"], robot["dropoff_target"]) < 1.5 and robot["picked"]:
                     robot["picked"] = 0
                     robot["current_load"] = 0.0
                     self.completed_tasks += 1
@@ -234,7 +234,7 @@ class WarehouseEnv:
                 else:
                     self.invalid_action_count += 1
             elif act == ActionType.CHARGE:
-                at_station = any(self._manhattan(robot["pos"], s) < 1.1 for s in self.charging_stations)
+                at_station = any(self._manhattan(robot["pos"], s) < 1.5 for s in self.charging_stations)
                 if at_station:
                     robot["battery"] = min(100.0, robot["battery"] + 10.0)
                     robot["velocity"] = [0.0, 0.0]
@@ -267,7 +267,11 @@ class WarehouseEnv:
 
     def get_grade(self):
         rubric = EliteWarehouseRubric()
-        return float(round(rubric(None, self), 4))
+        raw = rubric(None, self)
+        # Squash raw score to strictly open (0, 1) — satisfies OpenEnv requirement.
+        # Uses the same tanh sigmoid defined in rubrics._squash.
+        from rubrics import _squash
+        return float(round(_squash(float(raw)), 6))
 
     def get_rubric_breakdown(self):
         rubric = EliteWarehouseRubric()

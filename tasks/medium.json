@@ -1,8 +1,8 @@
 {
-  "max_steps": 75,
+  "max_steps": 100,
   "num_robots": 3,
-  "spill_prob": 0.05,
-  "target_tasks": 5,
+  "spill_prob": 0.03,
+  "target_tasks": 4,
   "charging_stations": [
     [0, 0],
     [0, 9],
