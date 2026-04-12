@@ -67,6 +67,9 @@ def state():
         return {"error": "No active environment"}
     return ENV.state().model_dump()
 
-if __name__ == "__main__":
+def main():
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=7860)
+
+if __name__ == "__main__":
+    main()
