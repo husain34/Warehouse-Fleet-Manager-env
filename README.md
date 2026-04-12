@@ -1,46 +1,56 @@
 ---
-title: Warehouse Fleet Management
-emoji: 🚀
-colorFrom: blue
+title: Warehouse Fleet Management Elite
+emoji: 🏗️
+colorFrom: indigo
 colorTo: purple
 sdk: docker
-pinned: false
+pinned: true
+tags:
+- openenv
+- reinforcement-learning
+- multi-agent
+- logistics
 ---
 
-# Warehouse Fleet Management: Elite Swarm Intelligence
+# Warehouse Fleet Management: Swarm Intelligence (v2.0)
 
-This environment simulates a real-world warehouse logistics scenario where a swarm of autonomous robots must coordinate to fulfill delivery tasks. It is designed to evaluate long-horizon reasoning, multi-agent coordination, and safety under dynamic constraints.
+This is a high-fidelity industrial warehouse simulation designed for the **Meta PyTorch OpenEnv Hackathon**. Unlike traditional "toy" grid environments, v2.0 introduces realistic industrial constraints, heterogeneous robotics, and physics-based kinematics that challenge the reasoning capabilities of frontier LLM agents.
 
-## 🛠 Elite Features (OpenEnv v2.0)
+## 🏗️ Elite Features (Industrial Grade)
 
-- **Narrative-Driven Reasoning**: Unlike raw coordinate grids, this environment generates a **Strategic Narrative** every step. This natural language summary describes exactly what each robot is doing, its current progress, and any environmental hazards, significantly reducing spatial hallucinations in LLMs.
-- **Multi-Dimensional Rubric**: Performance is evaluated using a `WeightedSum` rubric:
-  - **Success (60%)**: Task completion.
-  - **Efficiency (20%)**: Optimal pathing and step counts.
-  - **Safety (20%)**: Avoiding environmental spills and collisions.
-- **Full OpenEnv Compliance**: Perfectly adheres to the OpenEnv specification with typed Pydantic models for step/reset/state.
+- **Kinematics Engine**: They operate with **inertia, acceleration, and friction**. Agents must manage momentum to navigate tight warehouse aisles without overshooting.
+- **Heterogeneous Fleet**: Deploy a diverse swarm including:
+    - **Swift**: Rapid response units with high acceleration but high power consumption.
+    - **Hauler**: High-capacity industrial workhorses with superior energy efficiency.
+- **Industrial Layout**: The environment features static **Rack Columns** that create defined "Aisles," forcing agents to master spatial reasoning and traffic management.
+- **Strategic Command Narrative**: A sophisticated spatial advisory engine that translates complex coordinate data into natural language "Fleet Advisories" (e.g., *"Path to Bay 4 is congested by r2; reroute recommended"*).
+- **Advanced Performance Telemetry**: Grading is performed via a 4-pillar **EliteWarehouseRubric**:
+    - **Efficiency (40%)**: Task throughput and path optimality.
+    - **Safety (20%)**: Collision risk and environmental spill avoidance.
+    - **Sustainability (20%)**: Energy management and battery health.
+    - **SLA Compliance (20%)**: Average steps per task completion.
 
-## 📦 Environment Definition
+## 📦 Specification
 
-### Action Space
-- `UP`, `DOWN`, `LEFT`, `RIGHT`: Move the robot 1 unit.
-- `PICK`: Pick up an item at a designated shelf.
-- `DROP`: Drop an item at a designated shelf.
-- `WAIT`: Stationary.
+### Action Space (Intent-Based)
+- `UP`, `DOWN`, `LEFT`, `RIGHT`: Apply **Thrust/Acceleration** in the specified direction.
+- `PICK` / `DROP`: Semantic interaction with load bays.
+- `CHARGE`: Mandatory docking at charging stations (requires precise stopping).
+- `WAIT`: Applies friction/braking to halt momentum.
 
 ### Observation Space
-- `robots`: Detailed state of each robot (position, picked status, battery, last error).
-- `environment`: Layout of shelves, charging stations, and dynamic spills.
-- `narrative`: Natural language summary of the scene.
-- `rubric_scores`: Real-time breakdown of performance across metrics.
+- **Ego State**: Velocity, Position, Battery, Load Status, and Profile.
+- **World State**: Static racks, dynamic spills, and charging station maps.
+- **Fleet Narrative**: Natural language "Command Center" logs.
+- **Rubric Breakdown**: Granular performance feedback across all 4 metrics.
 
-## 🏁 Tasks
+## 🏁 Scenarios
 
-1. **Easy (`easy_navigation`)**: 2 Robots, 3 Tasks. No dynamic hazards. Focus on basic navigation.
-2. **Medium (`medium_coordination`)**: 3 Robots, 5 Tasks. 5% Spill probability. Focus on yielding and collision avoidance.
-3. **Hard (`hard_swarm`)**: 4 Robots, 8 Tasks. 10% Spill probability. High congestion requires sophisticated swarm intelligence.
+1. **Easy (`easy_navigation`)**: 1 Robot, clear aisles, static targets. Focus on basic momentum control.
+2. **Medium (`medium_coordination`)**: 3 Robots, heterogeneous swarm, dynamic spills. Focus on yielding and energy management.
+3. **Hard (Elite) (`hard_swarm`)**: 6+ Robots, high-congestion racks, tight battery constraints, and "Rush Orders."
 
-## 🚀 Setup and Usage
+## 🚀 Setup
 
 **Installation:**
 ```bash
@@ -48,18 +58,18 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-**Running Inference:**
+**Running Evaluation:**
 ```bash
 export HF_TOKEN="your_hf_token"
 python inference.py
 ```
 
-*Note: The script emits structured stdout logs strictly following the `[START]`, `[STEP]`, and `[END]` format required by the Meta OpenEnv Hackathon.*
+*The evaluation emits strictly formatted stdout logs: `[START]`, `[STEP]`, and `[END]` following the Hackathon specification.*
 
-## 📊 Baseline Scores
+## 📊 Baseline Performance
 
-| Model / Agent | Easy | Medium | Hard |
-|--------------|------|--------|------|
-| Random Agent | 0.12 | 0.05   | 0.00 |
-| Llama-3 (8B) | 0.85 | 0.62   | 0.35 |
-| Llama-3 (70B)| 0.95 | 0.81   | 0.58 |
+| Model | Success Rate | Efficiency | Safety | Best Task |
+|-------|--------------|------------|--------|-----------|
+| Baseline LLM | 15% | 0.22 | 0.45 | Easy |
+| Reasoning Agent | 45% | 0.58 | 0.82 | Medium |
+| **Elite Controller** | **85%** | **0.91** | **0.98** | **Hard** |

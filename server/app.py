@@ -4,7 +4,8 @@ import json
 import os
 from typing import Optional
 
-from warehouse_env import WarehouseOpenEnv, Action
+from warehouse_env import WarehouseOpenEnv
+from models import Action
 
 app = FastAPI()
 
@@ -18,17 +19,25 @@ def load_task(task_name):
 
 @app.get("/")
 def root():
-    return {"status": "Warehouse Env Running"}
+    return {"status": "Elite Warehouse Env Running", "version": "2.0.0"}
 
 @app.get("/status")
 def status():
-    return {"status": "Warehouse Env Running"}
+    return {"status": "Elite Warehouse Env Running"}
 
 @app.post("/reset")
-def reset(task_name: Optional[str] = "easy"):
+def reset(task_id: Optional[str] = "easy_navigation"):
     global ENV
+    # Handle both filename and logical name
+    task_map = {
+        "easy_navigation": "easy",
+        "medium_coordination": "medium",
+        "hard_swarm": "hard"
+    }
+    file_key = task_map.get(task_id, "easy")
+    
     try:
-        config = load_task(task_name)
+        config = load_task(file_key)
     except FileNotFoundError:
         config = load_task("easy")
         
@@ -44,9 +53,6 @@ def step(action: Action):
     
     obs, reward, done, info = ENV.step(action)
     
-    if done:
-        info["rubric_breakdown"] = obs.rubric_scores
-        
     return {
         "observation": obs.model_dump(),
         "reward": reward.total,
@@ -61,10 +67,6 @@ def state():
         return {"error": "No active environment"}
     return ENV.state().model_dump()
 
-import uvicorn
-
-def main():
-    uvicorn.run(app, host="0.0.0.0", port=7860)
-
 if __name__ == "__main__":
-    main()
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=7860)
