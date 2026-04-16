@@ -1,121 +1,101 @@
 ---
-title: Warehouse Fleet Management Elite
-emoji: 🏗️
-colorFrom: indigo
+title: Warehouse Fleet Management
+emoji: 🚀
+colorFrom: blue
 colorTo: purple
 sdk: docker
-pinned: true
-tags:
-- openenv
-- reinforcement-learning
-- multi-agent
-- logistics
+app_file: app.py
+pinned: false
 ---
 
-# Warehouse Fleet Management: Swarm Intelligence (v2.0)
+# Warehouse Fleet Management Environment
 
-This is a high-fidelity industrial warehouse simulation designed for the **Meta PyTorch OpenEnv Hackathon**. Unlike traditional "toy" grid environments, v2.0 introduces realistic industrial constraints, heterogeneous robotics, and physics-based kinematics that challenge the reasoning capabilities of frontier LLM agents.
+## Environment Description & Motivation
+This is an OpenEnv-compatible warehouse fleet management environment designed to accurately simulate real-world logistics and operations. The core motivation is to model real-world problem-solving scenarios by determining the most efficient paths to optimize traffic for autonomous robot swarms. By completing tasks as fast as possible while preventing collisions, anticipating bottlenecks, and tracking battery states, this environment serves to test and develop systems capable of managing complex, dynamic fleet routing.
 
-## 🏗️ Elite Features (Industrial Grade)
+## Action and Observation Space Definitions
 
-- **Kinematics Engine**: Robots operate with **inertia, acceleration, and friction**. Agents must manage momentum to navigate tight warehouse aisles without overshooting.
-- **Heterogeneous Fleet**: Deploy a diverse swarm including:
-    - **Swift**: Rapid response units with high acceleration but high power consumption.
-    - **Hauler**: High-capacity industrial workhorses with superior energy efficiency.
-- **Industrial Layout**: Static **Rack Columns** at x = {2, 5, 8} create defined aisles, forcing agents to master spatial reasoning and traffic management.
-- **Drop Zones**: Designated delivery targets (distinct from charging stations) are explicitly provided in every observation, removing ambiguity about where loads must be delivered.
-- **Strategic Command Narrative**: A spatial advisory engine translates complex coordinate data into natural language "Fleet Advisories" (e.g., *"r1 (Swift) battery at 15%. Return to charger!"*).
-- **Advanced Performance Telemetry**: Grading is performed via a 4-pillar **EliteWarehouseRubric**:
-    - **Efficiency (40%)**: Task throughput and path optimality.
-    - **Safety (20%)**: Collision avoidance and environmental spill penalties.
-    - **Sustainability (20%)**: Energy management and battery health across the fleet.
-    - **SLA Compliance (20%)**: Average steps-per-task — no free credit until a task is completed.
+**Action Space:**
+The action space consists of a discrete set of commands assigned to each active robot in the swarm. The valid actions are:
+- `UP`, `DOWN`, `LEFT`, `RIGHT`: Move the robot 1 unit in the specified direction.
+- `PICK`: Pick up an item at a designated shelf.
+- `DROP`: Drop an item at a designated shelf.
+- `WAIT`: Keep the robot stationary in its current location.
 
-## 📦 Specification
+Actions are submitted as a dictionary mapping each robot ID to its chosen action:
+```json
+{
+  "actions": {
+    "r1": "RIGHT",
+    "r2": "UP",
+    "r3": "PICK"
+  }
+}
+```
 
-### Action Space (Intent-Based)
-| Action | Effect |
-|--------|--------|
-| `UP` / `DOWN` / `LEFT` / `RIGHT` | Apply **thrust/acceleration** in that direction — velocity accumulates |
-| `WAIT` | Applies friction/braking (velocity × 0.5) |
-| `PICK` | Picks up load — requires Manhattan distance < 1.1 from pickup target |
-| `DROP` | Delivers load — requires Manhattan distance < 1.1 from drop zone |
-| `CHARGE` | Recharges battery +10% — requires presence at a charging station |
+**Observation Space:**
+The environment provides a comprehensive JSON state representing grid conditions:
+- `grid_size`: Dimensions of the warehouse grid (e.g., [10, 10]).
+- `robots`: Dictionary of each robot's state (Position `pos`, target `goal`, inventory status `picked`, health `battery`, and `last_action_error` if blocked).
+- `environment`: Static and semi-static layouts, including permanent `obstacles`, temporary `spills`, and `charging_stations`.
+- `dynamic`: Real-time state such as `occupied_cells` and calculated continuous `congestion` maps.
+- `task_info`: Count of `remaining_tasks` and `completed_tasks`.
+- `step_info`: Current `step_count` vs `max_steps`.
 
-### Observation Space
-- **Ego State per Robot**: position (float), velocity (float), battery %, load status, robot profile, current goal.
-- **World State**: Static racks, charging stations, drop zones, and dynamic spill positions.
-- **Fleet Narrative**: Natural language "Command Center" log summarising battery warnings and goal distances.
-- **Rubric Breakdown**: Granular live scores across all 4 metrics, updated every step.
+## Task Descriptions & Expected Difficulty
+The environment defines three difficulty tasks, configured via JSON blueprints in `/tasks`:
 
-### Physics Notes
-- Collision with a rack or boundary: velocity resets to `[0, 0]` and **-5% battery penalty** is applied.
-- Hitting a spill cell: velocity is boosted by ×1.2 (slide), clamped at `1.5× max_velocity`.
-- Invalid `PICK`/`DROP`/`CHARGE` actions are counted and penalised in the Safety rubric.
+1. **Easy (`easy.json`)**
+   - **Difficulty:** Low
+   - **Environment:** 10x10 Grid, 50 Max Steps.
+   - **Objective:** 2 Robots coordinating to complete 3 tasks.
+   - **Challenges:** No dynamic spills (0% probability). The agent only needs minimal multi-agent reasoning to complete the tasks safely.
 
-## 🏁 Scenarios
+2. **Medium (`medium.json`)**
+   - **Difficulty:** Moderate
+   - **Environment:** 10x10 Grid, 75 Max Steps.
+   - **Objective:** 3 Robots coordinating to complete 5 tasks.
+   - **Challenges:** Introduces a 5% probability of dynamic spills. Agents must actively avoid random hazards while navigating slightly tighter spaces and yielding priority to avoid collisions.
 
-| # | Name | Robots | Target Tasks | Max Steps | Spill Prob | Difficulty |
-|---|------|--------|-------------|-----------|------------|------------|
-| 1 | **Easy** (`easy_navigation`) | 2 | 2 | 80 | 0% | 4 / 10 |
-| 2 | **Medium** (`medium_coordination`) | 3 | 4 | 100 | 3% | 6 / 10 |
-| 3 | **Hard** (`hard_swarm`) | 4 | 6 | 130 | 6% | 8.5 / 10 |
+3. **Hard (`hard.json`)**
+   - **Difficulty:** High
+   - **Environment:** 10x10 Grid, 100 Max Steps.
+   - **Objective:** 4 Robots coordinating to complete 8 tasks.
+   - **Challenges:** High congestion with 4 active robots, higher spill probability (10%), and frequent gridlock scenarios. Reaching optimal scores requires sophisticated swarm path calculation to prevent infinite loops and bottlenecks.
 
-### Scenario Details
+## Setup and Usage Instructions
 
-**Easy** — 2 robots (1 Swift + 1 Hauler), no spills, 80 steps. A clean environment to validate momentum control and basic PICK/DROP sequencing. 2 tasks required. Drop zones at `[9,9]` and `[9,0]`; chargers at `[0,0]` and `[0,1]`.
-
-**Medium** — 3 robots, low spills (3%), dense shelf clusters, 100 steps, 4 tasks. Requires proactive battery management and cross-fleet coordination. Drop zones at `[9,9]` and `[4,9]`.
-
-**Hard** — 4 robots, moderate spills (6%), 30 shelf cells in dense horizontal rows, 130 steps, 6 tasks. Chargers mid-grid at `[0,4–5]` and `[9,4–5]`; drop zones at all four corners.
-
-## 🚀 Setup
+**Prerequisites:**
+- Python 3.9+
+- Docker (optional, but supported for isolated environments via OpenEnv specification)
 
 **Installation:**
-```bash
-pip install -r requirements.txt
-pip install -e .
-```
+1. Clone the repository to your local environment.
+2. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-**Running Evaluation:**
+**Usage via CLI Inference:**
+To run the evaluation script against an LLM (such as Llama-3 or an OpenAI-compatible endpoint):
 ```bash
-export HF_TOKEN="your_hf_token"
+export API_BASE_URL="https://integrate.api.nvidia.com/v1" # Or custom LLM endpoint
+export MODEL_NAME="openai/gpt-oss-20b"                    # Or target model
+export HF_TOKEN="your_api_token"
 python inference.py
 ```
+This automatically runs through the Easy, Medium, and Hard benchmarks and logs the evaluation trace.
 
-*The evaluation emits strictly formatted stdout logs per the Hackathon specification:*
+**Integration into OpenEnv:**
+The environment wrapper `WarehouseOpenEnv` conforms to standard OpenEnv API specs (`/reset`, `/step`, `/state`). You can launch a FastAPI handler using standard OpenEnv validators.
 
-```
-[START] task=<name> env=warehouse_v2_elite model=<model>
-[STEP]  step=<n> action=<json> reward=<float> done=<bool> error=<msg|null>
-[END]   success=<true|false> steps=<n> score=<float> rewards=<csv>
-```
+## Baseline Scores
+*Scores below are normalized grades (ranging strictly between 0 and 1) based on task completion ratio and step efficiency.*
 
-> **Note**: `score` is always present on the `[END]` line, even on error, allowing reliable automated grading.
+| Model / Agent | Task: Easy | Task: Medium | Task: Hard |
+|--------------|------------|--------------|------------|
+| Random Agent | 0.12       | 0.05         | 0.00       |
+| Llama-3 (8B) | 0.85       | 0.62         | 0.35       |
+| Llama-3 (70B)| 0.95       | 0.81         | 0.58       |
 
-## 📊 Baseline Performance
-
-| Model | Success Rate | Efficiency | Safety | Best Task |
-|-------|-------------|------------|--------|-----------|
-| Random Agent | 3% | 0.08 | 0.30 | — |
-| Baseline LLM (no CoT) | 15% | 0.22 | 0.45 | Easy |
-| Reasoning Agent (CoT) | 45% | 0.58 | 0.82 | Medium |
-| **Elite Controller** | **85%** | **0.91** | **0.98** | **Hard** |
-
-## 🔧 Changelog
-
-### v2.2.0 (latest)
-- **[FIX]** Score is now guaranteed strictly within `(0, 1)` via a `tanh`-based sigmoid squash applied to the raw rubric output — no hardcoded floor/ceiling, mathematically principled.
-- **[IMPROVE]** PICK / DROP / CHARGE proximity threshold widened from `1.1` → `1.5` Manhattan units to account for floating-point momentum positions.
-- **[IMPROVE]** SLA elite threshold relaxed from 20 → 30 steps/task, poor threshold from 40 → 60 steps/task — calibrated for momentum-based physics.
-- **[IMPROVE]** Safety rubric collision penalty softened (per-collision 0.20 → 0.15; cap 0.80 → 0.60).
-- **[IMPROVE]** Sustainability rubric critical-battery thresholds softened (dead robot penalty 0.25 → 0.20).
-- **[IMPROVE]** Task configs rebalanced: Easy (80 steps / 2 tasks), Medium (100 steps / 4 tasks / 3% spills), Hard (130 steps / 6 tasks / 6% spills).
-
-### v2.1.0
-- **[FIX]** `[END]` log now always includes `score=` field, even on exception — grader-safe.
-- **[FIX]** Rack collision and spill detection now use `round()` instead of `int()` — robots can no longer clip through walls at fractional positions.
-- **[FIX]** Drop zones (`drop_zones`) are now an explicit, configurable field in task JSONs and surfaced in the `EnvironmentState` observation.
-- **[FIX]** `SustainabilityRubric` now handles both dict-based and Pydantic `RobotState` robot representations safely.
-- **[FIX]** `SLAComplianceRubric` returns `0.0` (not `0.5`) when no tasks are completed.
-- **[IMPROVE]** All task configs updated with explicit `drop_zones` arrays.
+*Note: Baseline outputs depend heavily on strict adherence to JSON output requirements and the anti-loop protocol. Stronger LLMs yield fewer invalid actions.*

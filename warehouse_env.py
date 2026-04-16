@@ -1,283 +1,371 @@
 import random
-import math
-from typing import Dict, List, Optional, Tuple, Any
-from pydantic import BaseModel
-
-from models import (
-    Action, ActionType, RobotProfileType, RobotProfile, 
-    RobotState, EnvironmentState, DynamicState, TaskInfo, 
-    StepInfo, Observation, Reward
-)
-from rubrics import EliteWarehouseRubric
+from typing import Dict, List, Optional
+from pydantic import BaseModel, field_validator
 
 # =========================
-# 🔹 Elite Core Logic
+# 🔹 Pydantic Schemas
 # =========================
 
-PROFILES = {
-    RobotProfileType.SWIFT: RobotProfile(
-        name=RobotProfileType.SWIFT,
-        max_velocity=1.5,
-        acceleration=0.5,
-        battery_drain_rate=0.05,
-        load_penalty=1.5
-    ),
-    RobotProfileType.HAULER: RobotProfile(
-        name=RobotProfileType.HAULER,
-        max_velocity=0.8,
-        acceleration=0.2,
-        battery_drain_rate=0.02,
-        load_penalty=1.2
-    )
-}
+VALID_ACTIONS = {"UP", "DOWN", "LEFT", "RIGHT", "PICK", "DROP", "WAIT"}
+
+class Action(BaseModel):
+    actions: Dict[str, str]
+
+    @field_validator("actions")
+    @classmethod
+    def validate_actions(cls, v):
+        for rid, act in v.items():
+            if act not in VALID_ACTIONS:
+                raise ValueError(f"Invalid action '{act}' for {rid}")
+        return v
+
+
+class Reward(BaseModel):
+    total: float
+
+
+class RobotState(BaseModel):
+    pos: List[int]
+    goal: List[int]
+    picked: bool
+    battery: int
+    status: str
+    last_action: Optional[str] = None
+
+
+class EnvironmentState(BaseModel):
+    obstacles: List[List[int]]
+    spills: List[List[int]]
+    charging_stations: List[List[int]]
+
+
+class DynamicState(BaseModel):
+    occupied_cells: List[List[int]]
+    congestion: Dict[str, float]
+
+
+class TaskInfo(BaseModel):
+    remaining_tasks: int
+    completed_tasks: int
+
+
+class StepInfo(BaseModel):
+    step_count: int
+    max_steps: int
+
+
+class Observation(BaseModel):
+    grid_size: List[int]
+    robots: Dict[str, RobotState]
+    environment: EnvironmentState
+    dynamic: DynamicState
+    task_info: TaskInfo
+    step_info: StepInfo
+    last_action_error: Optional[str]
+
+
+# =========================
+# 🔹 Core Logic (UNCHANGED)
+# =========================
 
 class WarehouseEnv:
     def __init__(self, config):
         self.size = 10
         self.step_count = 0
+
         self.config = config
 
-        self.max_steps = config.get("max_steps", 100)
-        self.num_robots = config.get("num_robots", 2)
-        self.spill_prob = config.get("spill_prob", 0.05)
+        self.max_steps = config["max_steps"]
+        self.num_robots = config["num_robots"]
+        self.spill_prob = config["spill_prob"]
 
-        self.charging_stations = config.get("charging_stations", [[0, 0]])
-        self.shelves = config.get("shelves", [])
-        # Drop zones: explicit delivery targets (distinct from charging stations)
-        self.drop_zones = config.get("drop_zones", [[0, 9], [9, 0]])
-        
-        # Industrial Layout: Racks
-        self.racks = self._generate_industrial_racks()
+        self.charging_stations = config["charging_stations"]
+        self.shelves = config["shelves"]
 
-        self.target_tasks = config.get("target_tasks", 5)
+        self.target_tasks = config["target_tasks"]
         self.completed_tasks = 0
 
         self.robots = {}
+        self.obstacles = []
         self.spills = []
-        self.spill_hits = 0
-        self.collision_count = 0
-        self.invalid_action_count = 0
 
+        self._initialize_elements()
         self._spawn_robots()
-
-    def _generate_industrial_racks(self):
-        """Generates standard industrial rack columns."""
-        racks = []
-        for x in [2, 5, 8]: # Rack columns
-            for y in range(1, 9): # Leave space at top/bottom for corridors
-                racks.append([x, y])
-        return racks
 
     def _manhattan(self, a, b):
         return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
     def _get_empty_cell(self):
-        all_cells = [[float(x), float(y)] for x in range(self.size) for y in range(self.size)]
+        all_cells = [[x, y] for x in range(self.size) for y in range(self.size)]
         
         occupied = set(tuple(o) for o in (
-            self.racks +
+            self.obstacles +
             self.charging_stations +
             self.shelves +
             [s["pos"] for s in self.spills] +
             [r["pos"] for r in self.robots.values()]
         ))
 
-        free_cells = [cell for cell in all_cells if tuple(map(int, cell)) not in occupied]
+        free_cells = [cell for cell in all_cells if tuple(cell) not in occupied]
+
         if not free_cells:
-            return [0.0, 0.0] # Fallback
+            raise Exception("No free cells available!")
+
         return random.choice(free_cells)
+
+    def _get_valid_adjacent(self, target_pos):
+        x, y = target_pos
+        candidates = [[x, y+1], [x, y-1], [x+1, y], [x-1, y]]
+
+        occupied = (
+            self.obstacles +
+            self.shelves +
+            self.charging_stations +
+            [s["pos"] for s in self.spills] +
+            [r["pos"] for r in self.robots.values()]
+        )
+
+        valid = [
+            c for c in candidates
+            if 0 <= c[0] < self.size and 0 <= c[1] < self.size and c not in occupied
+        ]
+
+        return random.choice(valid) if valid else self._get_empty_cell()
+
+    def _assign_task(self, robot):
+        pickup_shelf = random.choice(self.shelves)
+        dropoff_shelf = random.choice([s for s in self.shelves if s != pickup_shelf])
+        
+        robot["pickup_target"] = self._get_valid_adjacent(pickup_shelf)
+        robot["dropoff_target"] = self._get_valid_adjacent(dropoff_shelf)
+        robot["goal"] = robot["pickup_target"]
+        
+        # NEW: track efficiency
+        robot["task_start_step"] = self.step_count
+        robot["delivery_steps"] = 0
+
+    def _initialize_elements(self):
+        self.obstacles = []  # No random obstacles
 
     def _spawn_robots(self):
         for i in range(1, self.num_robots + 1):
-            profile_type = RobotProfileType.SWIFT if i % 2 == 1 else RobotProfileType.HAULER
-            rid = f"r{i}"
-            self.robots[rid] = {
+            self.robots[f"r{i}"] = {
                 "pos": self._get_empty_cell(),
-                "velocity": [0.0, 0.0],
                 "picked": 0,
-                "battery": 100.0,
+                "battery": 100,
                 "total_reward": 0,
-                "profile": profile_type,
+                "charge_reward_eligible": True,
+                "delivery_steps": 0,
                 "last_action": None,
-                "task_start_step": self.step_count,
-                "current_load": 0.0
+                "task_start_step": 0
             }
-            self._assign_task(self.robots[rid])
-
-    def _assign_task(self, robot):
-        # Prevent "Goal Farming": ensure goal is not too close to current position
-        max_retries = 10
-        pickup_loc = random.choice(self.racks)
-        for _ in range(max_retries):
-            candidate = random.choice(self.racks)
-            if self._manhattan(robot["pos"], candidate) > 4.0:
-                pickup_loc = candidate
-                break
-        
-        dropoff_loc = random.choice(self.charging_stations + self.drop_zones)
-        
-        robot["goal"] = pickup_loc
-        robot["pickup_target"] = pickup_loc
-        robot["dropoff_target"] = dropoff_loc
-        robot["task_start_step"] = self.step_count
-
-    def generate_narrative(self):
-        narrative = f"Status: Elite Warehouse Ops. Step {self.step_count}/{self.max_steps}. System Throughput: {self.completed_tasks} units. "
-        
-        for rid, r in self.robots.items():
-            profile = PROFILES[r["profile"]]
-            v_mag = math.sqrt(r["velocity"][0]**2 + r["velocity"][1]**2)
-            narrative += f"[{rid} ({r['profile'].value})]: At {r['pos']}, Vel {v_mag:.1f}, Batt {r['battery']:.0f}%. "
-            
-            if r["battery"] < 20:
-                narrative += "CRITICAL: Return to charger immediately! "
-            
-            dist = self._manhattan(r["pos"], r["goal"])
-            task = "Pickup" if not r["picked"] else "Dispatch"
-            narrative += f"Goal: {task} at {r['goal']} ({dist:.1f}m away). "
-
-        if self.spills:
-            narrative += f"Alert: Spills detected at {', '.join([str(s['pos']) for s in self.spills])}. Slippery conditions!"
-            
-        return narrative
+            self._assign_task(self.robots[f"r{i}"])
 
     def _update_spills(self):
-        self.spills = [s for s in self.spills if s["timer"] > 1]
-        for s in self.spills: s["timer"] -= 1
+        active_spills = []
+        for s in self.spills:
+            s["timer"] -= 1
+            if s["timer"] > 0:
+                active_spills.append(s)
+        self.spills = active_spills
+
+        goal_positions = []
+        for r in self.robots.values():
+            goal_positions.append(r["pickup_target"])
+            goal_positions.append(r["dropoff_target"])
 
         if random.random() < self.spill_prob:
-            pos = [random.randint(0, 9), random.randint(0, 9)]
-            if pos not in self.racks:
-                self.spills.append({"pos": pos, "timer": random.randint(5, 10)})
+            while True:
+                pos = self._get_empty_cell()
+                if pos not in goal_positions:
+                    self.spills.append({
+                        "pos": pos,
+                        "timer": random.randint(5, 6)
+                    })
+                    break
+
+    def _calculate_congestion(self):
+        congestion_data = []
+        robot_positions = [r["pos"] for r in self.robots.values()]
+        for pos in robot_positions:
+            nearby = sum(
+                1 for other in robot_positions
+                if other != pos and abs(pos[0]-other[0]) + abs(pos[1]-other[1]) <= 2
+            )
+            value = min(1.0, nearby * 0.3)
+            congestion_data.append([pos[0], pos[1], value])
+        return congestion_data
+
+    def get_observation(self):
+        return {
+            "robots": self.robots,
+            "obstacles": self.obstacles,
+            "spills": [s["pos"] for s in self.spills],
+            "charging_stations": self.charging_stations,
+            "occupied": [r["pos"] for r in self.robots.values()],
+            "congestion": self._calculate_congestion(),
+            "step_count": self.step_count,
+            "max_steps": self.max_steps
+        }
 
     def apply_step(self, actions):
         self.step_count += 1
         self._update_spills()
         step_rewards = {rid: 0.0 for rid in self.robots}
+
+        # ✅ FIXED: Pre-populate intended_moves (WAIT bug fix)
+        intended_moves = {
+            rid: list(r["pos"]) for rid, r in self.robots.items()
+        }
+        
         step_errors = []
 
         for rid, act in actions.items():
-            if rid not in self.robots: continue
-            robot = self.robots[rid]
-            profile = PROFILES[robot["profile"]]
-            
-            if robot["battery"] <= 0:
-                step_errors.append(f"{rid} power failure")
+            if rid not in self.robots or self.robots[rid]["battery"] <= 0:
                 continue
-
-            robot["last_action"] = act
             
-            # 1. Physics: Velocity Update
-            acc = profile.acceleration
-            if act == ActionType.UP: robot["velocity"][1] += acc
-            elif act == ActionType.DOWN: robot["velocity"][1] -= acc
-            elif act == ActionType.LEFT: robot["velocity"][0] -= acc
-            elif act == ActionType.RIGHT: robot["velocity"][0] += acc
-            elif act == ActionType.WAIT:
-                # Friction/Braking
-                robot["velocity"][0] *= 0.5
-                robot["velocity"][1] *= 0.5
-
-            # Max Speed Constraint (Load impacts speed)
-            max_v = profile.max_velocity / (1.0 + robot["current_load"] * 0.5)
-            v_mag = math.sqrt(robot["velocity"][0]**2 + robot["velocity"][1]**2)
-            if v_mag > max_v:
-                scale = max_v / v_mag
-                robot["velocity"][0] *= scale
-                robot["velocity"][1] *= scale
-
-            # 2. Position Update
-            old_pos = list(robot["pos"])
-            new_pos = [
-                old_pos[0] + robot["velocity"][0],
-                old_pos[1] + robot["velocity"][1]
-            ]
-
-            # 3. Collision & Boundary Checks (ANTI-EXPLOIT)
-            hit = False
-            # Boundary
-            if new_pos[0] < 0 or new_pos[0] >= self.size or new_pos[1] < 0 or new_pos[1] >= self.size:
-                hit = True
-                step_errors.append(f"{rid} boundary collision")
-            # Racks
-            elif [round(new_pos[0]), round(new_pos[1])] in self.racks:
-                hit = True
-                step_errors.append(f"{rid} rack collision")
+            pos = list(self.robots[rid]["pos"])
+            target = list(pos)
+            if act == "UP": target[1] += 1
+            elif act == "DOWN": target[1] -= 1
+            elif act == "LEFT": target[0] -= 1
+            elif act == "RIGHT": target[0] += 1
             
-            if hit:
-                # Anti-Exploit: Collision damage drains battery and stops velocity
-                robot["velocity"] = [0.0, 0.0]
-                robot["battery"] = max(0.0, robot["battery"] - 5.0) 
-                self.collision_count += 1
-            else:
-                robot["pos"] = new_pos
-
-            # 4. Energy Drain
-            drain = profile.battery_drain_rate * (1.0 + v_mag * 0.5)
-            if robot["picked"]: drain *= profile.load_penalty
-            robot["battery"] = max(0.0, robot["battery"] - drain)
-
-            # 5. Semantic Actions (PICK/DROP/CHARGE) (ANTI-EXPLOIT penalties)
-            if act == ActionType.PICK:
-                if self._manhattan(robot["pos"], robot["pickup_target"]) < 1.5 and not robot["picked"]:
-                    robot["picked"] = 1
-                    robot["current_load"] = 1.0
-                    robot["goal"] = robot["dropoff_target"]
-                else:
-                    self.invalid_action_count += 1
-            elif act == ActionType.DROP:
-                if self._manhattan(robot["pos"], robot["dropoff_target"]) < 1.5 and robot["picked"]:
-                    robot["picked"] = 0
-                    robot["current_load"] = 0.0
-                    self.completed_tasks += 1
-                    self._assign_task(robot)
-                else:
-                    self.invalid_action_count += 1
-            elif act == ActionType.CHARGE:
-                at_station = any(self._manhattan(robot["pos"], s) < 1.5 for s in self.charging_stations)
-                if at_station:
-                    robot["battery"] = min(100.0, robot["battery"] + 10.0)
-                    robot["velocity"] = [0.0, 0.0]
-                else:
-                    self.invalid_action_count += 1
-
-            # Spill Penalty & SLIDE (ANTI-EXPLOIT velocity hard-clamp)
-            if [round(robot["pos"][0]), round(robot["pos"][1])] in [s["pos"] for s in self.spills]:
-                self.spill_hits += 1
-                robot["velocity"][0] *= 1.2 
-                robot["velocity"][1] *= 1.2
+            if target[0] < 0 or target[0] >= self.size or target[1] < 0 or target[1] >= self.size:
+                step_errors.append(f"{rid} blocked by boundary")
+                target = list(pos)
                 
-                # Hard clamp velocity to 1.5x max_v even when sliding
-                v_mag_slide = math.sqrt(robot["velocity"][0]**2 + robot["velocity"][1]**2)
-                if v_mag_slide > profile.max_velocity * 1.5:
-                    scale = (profile.max_velocity * 1.5) / v_mag_slide
-                    robot["velocity"][0] *= scale
-                    robot["velocity"][1] *= scale
+            intended_moves[rid] = target
+
+        for rid, act in actions.items():
+            if rid not in self.robots or self.robots[rid]["battery"] <= 0:
+                continue
+            
+            robot = self.robots[rid]
+            robot["last_action"] = act
+            old_pos = list(robot["pos"])
+            reward = -0.05
+
+            if robot["battery"] < 40:
+                robot["charge_reward_eligible"] = True
+
+            # previous + new position comparison (for shaping)
+            prev_pos = old_pos
+            target_pos = intended_moves[rid]
+            new_pos = target_pos
+
+            goal = robot["goal"]
+
+            prev_dist = self._manhattan(prev_pos, goal)
+            new_dist = self._manhattan(new_pos, goal)
+
+            # =========================
+            # 🧠 DENSE SHAPING REWARD
+            # =========================
+            if act in ["UP", "DOWN", "LEFT", "RIGHT"]:
+                if target_pos == old_pos:
+                    reward -= 3.0   # boundary hit (clamped)
+                elif target_pos in self.obstacles or target_pos in self.shelves:
+                    reward -= 3.0   # obstacle / shelf hit
+                    step_errors.append(f"{rid} hit obstacle/shelf")
+                else:
+                    crash = False
+
+                    for other_rid, other_pos in intended_moves.items():
+                        if other_rid != rid and target_pos == other_pos:
+                            crash = True
+                            step_errors.append(f"{rid} collided with {other_rid}")
+
+                    if crash:
+                        reward -= 4.0   # collision with other robot
+                    else:
+                        robot["pos"] = target_pos
+
+                        # 🔥 MOVEMENT SHAPING
+                        if new_dist < prev_dist:
+                            reward += 0.1
+                        else:
+                            reward -= 0.05
+            # =========================
+            # PICK LOGIC
+            # =========================
+            elif act == "PICK":
+                if (robot["pos"] == robot["pickup_target"]) and (robot["picked"] == 0):
+                    robot["picked"] = 1
+                    robot["goal"] = robot["dropoff_target"]
+                    reward += 6.0   # reward for pickup
+
+            # =========================
+            # DROP LOGIC
+            # =========================
+            elif act == "DROP":
+                if (robot["pos"] == robot["dropoff_target"]) and (robot["picked"] == 1):
+                    robot["picked"] = 0
+                    self.completed_tasks += 1
+
+                    # =========================
+                    # ⏱ SPEED BONUS (NEW)
+                    # =========================
+                    steps_taken = self.step_count - robot.get("task_start_step", self.step_count)
+            
+                    speed_bonus = max(0.0, 15.0 - steps_taken * 0.3)
+                    delay_penalty = min(8.0, steps_taken * 0.25)
+
+                    drop_reward = 12.0 + speed_bonus - delay_penalty
+                    drop_reward = min(25.0, max(5.0, drop_reward))
+
+                    reward += drop_reward
+
+                    # assign new task
+                    self._assign_task(robot)
+
+                else:
+                    reward -= 4.0    # invalid drop penalty
+
+            # =========================
+            # WAIT LOGIC
+            # =========================
+            elif act == "WAIT":
+                reward -= 0.1
+
+            # ⚠️ SPILL COLLISION PENALTY
+            if robot["pos"] in [s["pos"] for s in self.spills]:
+                reward -= 6.0
+
+            # 🚦 CONGESTION penalty
+            for _, _, val in self._calculate_congestion():
+                reward -= val * 0.2
+
+            robot["total_reward"] += reward
+            step_rewards[rid] = float(round(reward, 2))
 
         return self.get_observation(), step_rewards, step_errors
 
-    def get_observation(self):
-        # Simplified core obs for the wrapper
-        return {
-            "robots": self.robots,
-            "spills": [s["pos"] for s in self.spills],
-            "step_count": self.step_count,
-            "max_steps": self.max_steps
-        }
-
     def get_grade(self):
-        rubric = EliteWarehouseRubric()
-        raw = rubric(None, self)
-        # Squash raw score to strictly open (0, 1) — satisfies OpenEnv requirement.
-        # Uses the same tanh sigmoid defined in rubrics._squash.
-        from rubrics import _squash
-        return float(round(_squash(float(raw)), 6))
+        import math
+        # Calculate completion ratio strictly based on LLM performance (no artificial penalties)
+        task_ratio = float(self.completed_tasks) / float(self.target_tasks)
+        
+        # Calculate total rewards (positive for efficiency, negative for faults/collisions)
+        total_accumulated_reward = sum(r["total_reward"] for r in self.robots.values())
+        
+        # Apply a natural logistic squash function to the unbound rewards.
+        # This replaces the hardcoded max() and min() constraints.
+        # The result is strictly between 0 and 1, naturally representing LLM performance.
+        scale = float(self.num_robots * self.max_steps * 0.5)
+        reward_factor = 1.0 / (1.0 + math.exp(-total_accumulated_reward / scale))
+        
+        # Combine metrics. Because reward_factor is strictly in (0, 1),
+        # the final raw_score reliably settles in the required (0, 1) bounds
+        # without randomly hardcoding min or max limits.
+        raw_score = (task_ratio * 0.7) + (reward_factor * 0.3)
+        
+        return float(round(raw_score, 4))
 
-    def get_rubric_breakdown(self):
-        rubric = EliteWarehouseRubric()
-        rubric(None, self)
-        return {n: float(round(c.last_score, 2)) for n, c in rubric.named_children()}
 
+# =========================
+# 🔹 Wrapper
+# =========================
 
 class WarehouseOpenEnv:
     def __init__(self, config):
@@ -287,47 +375,44 @@ class WarehouseOpenEnv:
 
     def _convert_obs(self):
         core = self.env.get_observation()
-        
+
         robots = {}
         for rid, r in self.env.robots.items():
+            status = "active" if r["battery"] > 0 else "failed"
             robots[rid] = RobotState(
                 pos=r["pos"],
-                velocity=r["velocity"],
                 goal=r["goal"],
                 picked=bool(r["picked"]),
-                current_load=r["current_load"],
-                battery=int(r["battery"]),
-                status="active" if r["battery"] > 0 else "failed",
-                last_action=r.get("last_action"),
-                profile=r["profile"]
+                battery=r["battery"],
+                status=status,
+                last_action=r.get("last_action")
             )
+
+        congestion_dict = {
+            str([x, y]): val for x, y, val in core["congestion"]
+        }
 
         return Observation(
             grid_size=[self.env.size, self.env.size],
             robots=robots,
             environment=EnvironmentState(
-                obstacles=[],
+                obstacles=core["obstacles"] + self.env.shelves,
                 spills=core["spills"],
-                charging_stations=self.env.charging_stations,
-                racks=self.env.racks,
-                drop_zones=self.env.drop_zones
+                charging_stations=core["charging_stations"]
             ),
             dynamic=DynamicState(
-                occupied_cells=[[int(r["pos"][0]), int(r["pos"][1])] for r in self.env.robots.values()],
-                congestion={} # Could implement if needed
+                occupied_cells=core["occupied"],
+                congestion=congestion_dict
             ),
             task_info=TaskInfo(
                 remaining_tasks=self.env.target_tasks - self.env.completed_tasks,
-                completed_tasks=self.env.completed_tasks,
-                system_throughput=self.env.completed_tasks / max(1, self.env.step_count)
+                completed_tasks=self.env.completed_tasks
             ),
             step_info=StepInfo(
                 step_count=core["step_count"],
                 max_steps=core["max_steps"]
             ),
-            last_action_error=self.last_error,
-            narrative=self.env.generate_narrative(),
-            rubric_scores=self.env.get_rubric_breakdown()
+            last_action_error=self.last_error
         )
 
     def reset(self):
@@ -337,16 +422,34 @@ class WarehouseOpenEnv:
 
     def step(self, action: Action):
         try:
-            _, _, step_errors = self.env.apply_step(action.actions)
-            self.last_error = "; ".join(step_errors) if step_errors else None
-        except Exception as e:
-            self.last_error = str(e)
+            actions_dict = {
+                rid: action.actions.get(rid, "WAIT")
+                for rid in self.env.robots
+            }
 
-        done = (self.env.step_count >= self.env.max_steps or 
-                self.env.completed_tasks >= self.env.target_tasks)
-        
-        info = {"grade": self.env.get_grade()} if done else {}
-        return self._convert_obs(), Reward(total=0.0), done, info
+            _, rewards, step_errors = self.env.apply_step(actions_dict)
+            total_reward = float(sum(rewards.values()))
+            reward_obj = Reward(total=total_reward)
+            
+            if step_errors:
+                self.last_error = "; ".join(step_errors)
+            else:
+                self.last_error = None
+
+        except ValueError as e:
+            self.last_error = str(e)
+            return self._convert_obs(), Reward(total=0.0), False, {}
+
+        done = (
+            self.env.step_count >= self.env.max_steps or
+            self.env.completed_tasks >= self.env.target_tasks
+        )
+
+        info = {}
+        if done:
+            info["grade"] = self.env.get_grade()
+
+        return self._convert_obs(), reward_obj, done, info
 
     def state(self):
         return self._convert_obs()

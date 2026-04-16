@@ -1,17 +1,7 @@
-name: warehouse_fleet_management_elite
-version: 2.0.0
-type: environment
-description: "A high-fidelity industrial warehouse swarm simulator featuring kinematics, heterogeneous robots, and sophisticated logistics rubrics."
-entrypoint: "server.app:app"
+name: warehouse_fleet_management
+version: 1.0.0
+description: A warehouse fleet management simulator for robots
 tasks:
   - easy_navigation
   - medium_coordination
   - hard_swarm
-metadata:
-  tags:
-    - multi-agent
-    - logistics
-    - kinematics
-    - industrial-simulation
-  author: "Elite Fleet Team"
-  render: true

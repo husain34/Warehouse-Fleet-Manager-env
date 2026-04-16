@@ -1,9 +1,0 @@
-README.md
-pyproject.toml
-server/app.py
-warehouse_fleet_management.egg-info/PKG-INFO
-warehouse_fleet_management.egg-info/SOURCES.txt
-warehouse_fleet_management.egg-info/dependency_links.txt
-warehouse_fleet_management.egg-info/entry_points.txt
-warehouse_fleet_management.egg-info/requires.txt
-warehouse_fleet_management.egg-info/top_level.txt
